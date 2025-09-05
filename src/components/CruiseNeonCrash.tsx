@@ -41,11 +41,10 @@ const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const fmtMult = (m: number) => `${m.toFixed(2)}x`;
 
-// Progressive hazard: increases the farther you go to avoid endless sails
-function icebergChance(safeHits: number): number {
-  // base ~8%, grows by ~2.5% per hit, with light randomness; capped at 55%
-  const base = 0.08 + safeHits * 0.025 + rand(0, 0.01);
-  return clamp(base, 0.08, 0.55);
+// Fixed iceberg probability helper (same for every ice)
+function icebergChance(): number {
+  // fixed probability for all ice — 40%
+  return 0.4;
 }
 
 // (makeChunk removed — obstacles are spawned directly in the rAF loop)
@@ -146,6 +145,7 @@ const CruiseNeonCrash: React.FC = () => {
   const SHIP_RIGHT_PAD = 0;
   const ICE_LEFT_PAD = 50;
   const ICE_RIGHT_PAD = 0;
+  // (cash-out threshold removed per request)
   // Persistence (round only)
   const SS_KEYS = {
     roundActive: 'cnc_roundActive',
@@ -287,7 +287,7 @@ const CruiseNeonCrash: React.FC = () => {
   };
 
   const startBettingPhase = () => {
-    // Enter 10s betting window; allow adjusting bet
+    // Enter 5s betting window; allow adjusting bet
     stopLoop();
     clearBettingTimers();
     setPhase("betting");
@@ -295,8 +295,8 @@ const CruiseNeonCrash: React.FC = () => {
     setHasCashed(false);
     setJoined(false);
     setActiveBet(null);
-    setCountdown(10);
-    setMessage("Place your bet. Round starts in 10s.");
+    setCountdown(5);
+    setMessage("Place your bet. Round starts in 5s.");
     // tick countdown and update message
     betIntervalRef.current = window.setInterval(() => {
       setCountdown((c) => {
@@ -305,11 +305,11 @@ const CruiseNeonCrash: React.FC = () => {
         return n;
       });
     }, 1000);
-    // auto start after 10s
+    // auto start after 5s
     betTimeoutRef.current = window.setTimeout(() => {
       clearBettingTimers();
       startRound();
-    }, 10000);
+    }, 5000);
   };
 
   const startRound = () => {
@@ -391,8 +391,8 @@ const CruiseNeonCrash: React.FC = () => {
         const m1 = planNextMultiplier();
         const m2 = planNextMultiplier();
         setObstacles([
-          { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x: baseX1, width: 220, height: 110, multiplier: m1, iceberg: Math.random() < 0.1, state: "idle", bornAt: performance.now() },
-          { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x: baseX2, width: 220, height: 110, multiplier: m2, iceberg: Math.random() < 0.1, state: "idle", bornAt: performance.now() },
+          { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x: baseX1, width: 220, height: 110, multiplier: m1, iceberg: Math.random() < icebergChance(), state: "idle", bornAt: performance.now() },
+          { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x: baseX2, width: 220, height: 110, multiplier: m2, iceberg: Math.random() < icebergChance(), state: "idle", bornAt: performance.now() },
         ]);
 
         // Gentle bob loop
@@ -474,7 +474,7 @@ const CruiseNeonCrash: React.FC = () => {
           if (safeHitThisFrame && idleCount < 2) {
             const m = planNextMultiplier();
             const x = spawnWorldXFor(2, shipBoundsRef.current.right, scrollRef.current);
-            updated = [...updated, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x, width: 220, height: 110, multiplier: m, iceberg: Math.random() < icebergChance(safeHitsRef.current), state: "idle", bornAt: ts }];
+            updated = [...updated, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x, width: 220, height: 110, multiplier: m, iceberg: Math.random() < icebergChance(), state: "idle", bornAt: ts }];
             spawnAccumRef.current = 0;
             spawnedThisFrame = true;
             needCommit = true;
@@ -485,7 +485,7 @@ const CruiseNeonCrash: React.FC = () => {
           while (!spawnedThisFrame && spawnAccumRef.current >= HIT_INTERVAL && idleNow < 2) {
             const m = planNextMultiplier();
             const x = spawnWorldXFor(2, shipBoundsRef.current.right, scrollRef.current);
-            updated = [...updated, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x, width: 220, height: 110, multiplier: m, iceberg: Math.random() < icebergChance(safeHitsRef.current), state: "idle", bornAt: ts }];
+            updated = [...updated, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, x, width: 220, height: 110, multiplier: m, iceberg: Math.random() < icebergChance(), state: "idle", bornAt: ts }];
             spawnAccumRef.current -= HIT_INTERVAL;
             spawnedThisFrame = true;
             needCommit = true;
@@ -532,6 +532,7 @@ const CruiseNeonCrash: React.FC = () => {
     if (phaseRef.current !== "running") return;
     if (!joinedRef.current) return;
     if (hasCashedRef.current) return; // only once per round
+    // cash-out allowed at any multiplier
     // Do NOT stop the game; simply grant payout and keep sailing
     const payout = activeBetRef.current * collectedRef.current;
     setBalance((b) => b + payout);
