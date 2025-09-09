@@ -41,6 +41,18 @@ const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const fmtMult = (m: number) => `${m.toFixed(2)}x`;
 
+// Money and jackpot helpers
+const fmtMoney = (v: number) => new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+const randJackpotX = (min: number, max: number) => parseFloat(rand(min, max).toFixed(2));
+const JACKPOT = {
+  localSeed: 9884.45,
+  globalSeed: 2994345.79,
+  // Smooth updates
+  tickMs: 250,                // 4 ticks per second
+  localIncPerTick: 0.0025,    // 0.0025 * 4 = 0.01 per second
+  globalIncPerTick: 0.01,     // 0.01 * 4 = 0.04 per second
+} as const;
+
 // Fixed iceberg probability helper (same for every ice)
 function icebergChance(): number {
   // fixed probability for all ice — 40%
@@ -114,6 +126,24 @@ const CruiseNeonCrash: React.FC = () => {
   const [activeBet, setActiveBet] = useState<number | null>(null);
   const activeBetRef = useRef<number>(0);
   useEffect(() => { activeBetRef.current = activeBet ?? 0; }, [activeBet]);
+  // jackpots
+  const [localJackpot, setLocalJackpot] = useState<number>(JACKPOT.localSeed);
+  const [globalJackpot, setGlobalJackpot] = useState<number>(JACKPOT.globalSeed);
+  const [localTargetX, setLocalTargetX] = useState<number>(randJackpotX(8.0, 15.99));
+  const [globalTargetX, setGlobalTargetX] = useState<number>(randJackpotX(25.0, 45.99));
+  const localWonThisRoundRef = useRef<boolean>(false);
+  const globalWonThisRoundRef = useRef<boolean>(false);
+  // High-precision accumulators to avoid rounding loss between ticks
+  const localJackpotAccRef = useRef<number>(JACKPOT.localSeed);
+  const globalJackpotAccRef = useRef<number>(JACKPOT.globalSeed);
+  const localTargetXRef = useRef<number>(localTargetX);
+  const globalTargetXRef = useRef<number>(globalTargetX);
+  useEffect(() => { localTargetXRef.current = localTargetX; }, [localTargetX]);
+  useEffect(() => { globalTargetXRef.current = globalTargetX; }, [globalTargetX]);
+  const localJackpotRef = useRef<number>(localJackpot);
+  const globalJackpotRef = useRef<number>(globalJackpot);
+  useEffect(() => { localJackpotRef.current = localJackpot; }, [localJackpot]);
+  useEffect(() => { globalJackpotRef.current = globalJackpot; }, [globalJackpot]);
   // single-cash-out guard
   const [hasCashed, setHasCashed] = useState<boolean>(false);
   const hasCashedRef = useRef<boolean>(false);
@@ -279,6 +309,21 @@ const CruiseNeonCrash: React.FC = () => {
     } catch {}
   };
 
+  // Live jackpot incrementers: Local +0.0025 per 250ms (0.01/sec), Global +0.01 per 250ms (0.04/sec)
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      // accumulate precisely, then emit 2dp for display
+      localJackpotAccRef.current += JACKPOT.localIncPerTick;
+      const nextL = parseFloat(localJackpotAccRef.current.toFixed(2));
+      setLocalJackpot((prev) => (prev !== nextL ? nextL : prev));
+
+      globalJackpotAccRef.current += JACKPOT.globalIncPerTick;
+      const nextG = parseFloat(globalJackpotAccRef.current.toFixed(2));
+      setGlobalJackpot((prev) => (prev !== nextG ? nextG : prev));
+    }, JACKPOT.tickMs);
+    return () => window.clearInterval(t);
+  }, []);
+
   // Start only (no manual reset control path anymore)
 
   const clearBettingTimers = () => {
@@ -367,6 +412,11 @@ const CruiseNeonCrash: React.FC = () => {
         // Reset planned multiplier sequence
         nextIndexRef.current = 1;
         plannedMultRef.current = 1;
+        // New jackpot targets for this round
+        localWonThisRoundRef.current = false;
+        globalWonThisRoundRef.current = false;
+        setLocalTargetX(randJackpotX(8.0, 15.99));
+        setGlobalTargetX(randJackpotX(25.0, 45.99));
         try {
           roundIdRef.current = (roundIdRef.current || 0) + 1;
           sessionStorage.setItem(SS_KEYS.roundId, String(roundIdRef.current));
@@ -442,6 +492,30 @@ const CruiseNeonCrash: React.FC = () => {
               setCollected(() => { const nv = o.multiplier; collectedRef.current = nv; return nv; });
               setSafeHits((h) => { const nh = h + 1; safeHitsRef.current = nh; return nh; });
               safeHitThisFrame = true;
+              // Jackpot matching check
+              if (joinedRef.current) {
+                const xHit = parseFloat(o.multiplier.toFixed(2));
+                const ltx = parseFloat(localTargetXRef.current.toFixed(2));
+                const gtx = parseFloat(globalTargetXRef.current.toFixed(2));
+                if (!localWonThisRoundRef.current && xHit === ltx) {
+                  localWonThisRoundRef.current = true;
+                  const prize = localJackpotRef.current;
+                  setBalance((b) => b + prize);
+                  localJackpotAccRef.current = JACKPOT.localSeed;
+                  setLocalJackpot(JACKPOT.localSeed);
+                  setMessage(`Local Jackpot WON! +₾ ${fmtMoney(prize)} at ${fmtMult(o.multiplier)}.`);
+                  beep(1600, 0.2, "square");
+                }
+                if (!globalWonThisRoundRef.current && xHit === gtx) {
+                  globalWonThisRoundRef.current = true;
+                  const prize = globalJackpotRef.current;
+                  setBalance((b) => b + prize);
+                  globalJackpotAccRef.current = JACKPOT.globalSeed;
+                  setGlobalJackpot(JACKPOT.globalSeed);
+                  setMessage(`Global Jackpot WON! +₾ ${fmtMoney(prize)} at ${fmtMult(o.multiplier)}.`);
+                  beep(1700, 0.22, "sawtooth");
+                }
+              }
               // mark obstacle as breaking
               updated = prev.map((p) => (p.id === o.id ? { ...p, state: "breaking" as const } : p));
               needCommit = true;
@@ -626,11 +700,33 @@ const CruiseNeonCrash: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="rounded-2xl border border-white/15 bg-white/5 px-3 py-1.5 backdrop-blur-md">
-              <div className="text-[10px] uppercase tracking-widest text-white/60 leading-none">Balance</div>
-              <div className="font-semibold text-sm md:text-base">₾ {balance.toFixed(2)}</div>
+          <div className="hidden sm:flex items-center gap-2">
+            <div className="rounded-xl border border-amber-400/60 bg-amber-500/15 px-2 py-1 backdrop-blur-md min-w-[220px] shrink-0">
+              <div className="flex flex-col whitespace-nowrap">
+                <div className="text-[10px] uppercase tracking-widest text-amber-200/90 leading-none">Local Jackpot</div>
+                <div className="font-mono tabular-nums font-semibold text-sm sm:text-base text-amber-100 w-[18ch] text-right">₾ {fmtMoney(localJackpot)}</div>
+                <div className="mt-0.5 flex items-center justify-between">
+                  <div className="text-[9px] uppercase tracking-widest text-amber-200/80 leading-none">Target</div>
+                  <div className="font-mono tabular-nums text-sm sm:text-base font-extrabold text-amber-200 bg-amber-500/20 border border-amber-400/60 rounded-md px-1.5 py-0.5 shadow-[0_0_8px_rgba(251,191,36,0.30)]">{fmtMult(localTargetX)}</div>
+                </div>
+              </div>
             </div>
-            <NeonButton onClick={() => setMuted((m) => !m)} variant="ghost" className="flex items-center gap-2">
+            <div className="rounded-xl border border-fuchsia-400/60 bg-fuchsia-500/15 px-2 py-1 backdrop-blur-md min-w-[220px] shrink-0">
+              <div className="flex flex-col whitespace-nowrap">
+                <div className="text-[11px] uppercase tracking-widest text-fuchsia-200/90 leading-none">Global Jackpot</div>
+                <div className="font-mono tabular-nums font-semibold text-sm sm:text-base text-fuchsia-100 w-[18ch] text-right">₾ {fmtMoney(globalJackpot)}</div>
+                <div className="mt-0.5 flex items-center justify-between">
+                  <div className="text-[9px] uppercase tracking-widest text-fuchsia-200/80 leading-none">Target</div>
+                  <div className="font-mono tabular-nums text-sm sm:text-base font-extrabold text-fuchsia-200 bg-fuchsia-500/20 border border-fuchsia-400/60 rounded-md px-1.5 py-0.5 shadow-[0_0_8px_rgba(217,70,239,0.30)]">{fmtMult(globalTargetX)}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-white/15 bg-white/5 px-3 py-1.5 backdrop-blur-md">
+            <div className="text-[10px] uppercase tracking-widest text-white/60 leading-none">Balance</div>
+            <div className="font-semibold text-sm md:text-base">₾ {balance.toFixed(2)}</div>
+          </div>
+          <NeonButton onClick={() => setMuted((m) => !m)} variant="ghost" className="flex items-center gap-2">
               {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}<span className="text-xs">{muted ? "Muted" : "Sound"}</span>
             </NeonButton>
           </div>
